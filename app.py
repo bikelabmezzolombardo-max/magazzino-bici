@@ -11,15 +11,18 @@ from io import BytesIO
 NOME_OFFICINA = "LA TUA OFFICINA BICI" # Cambialo con il tuo nome reale
 SETTORI = ["⚙️ TRASMISSIONE", "🛑 FRENI", "🚲 RUOTE/COPERTONI", "🛠️ TELAIO", "🔋 E-BIKE", "🧴 CONSUMABILI"]
 
-# --- DATABASE ---
-conn = sqlite3.connect('magazzino_v3.db', check_same_thread=False)
+# --- DATABASE (Versione Auto-Repair) ---
+def get_connection():
+    return sqlite3.connect('magazzino_v3.db', check_same_thread=False)
+
+conn = get_connection()
 c = conn.cursor()
+
+# Assicuriamoci che la tabella esista con TUTTE le colonne necessarie
 c.execute('''CREATE TABLE IF NOT EXISTS prodotti
              (barcode TEXT PRIMARY KEY, categoria TEXT, componente TEXT, 
               marca TEXT, quantita INTEGER, prezzo_acquisto REAL, prezzo_vendita REAL)''')
 conn.commit()
-
-st.set_page_config(page_title=NOME_OFFICINA, layout="wide", page_icon="🚲")
 
 # --- FUNZIONE GENERAZIONE ETICHETTA ---
 def genera_etichetta(barcode_val, nome_prod, prezzo):
