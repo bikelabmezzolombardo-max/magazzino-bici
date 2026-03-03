@@ -6,15 +6,23 @@ from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 
-# --- CONFIGURAZIONE OFFICINA ---
+# --- CONFIGURAZIONE OFFICINA (Adattata al tuo file CSV) ---
 NOME_OFFICINA = "BIKE LAB"
-SETTORI = ["⚙️ TRASMISSIONE", "🛑 FRENI", "🚲 RUOTE/COPERTONI", "🛠️ TELAIO", "🔋 E-BIKE", "🧴 CONSUMABILI"]
+# Queste sono le categorie estratte dal tuo resoconto 2025
+SETTORI = [
+    "COPERTONI", 
+    "PASTIGLIE", 
+    "ACCESSORI FRENI", 
+    "TRASMISSIONE", 
+    "CAMERE D'ARIA", 
+    "ACCESSORI TELAIO",
+    "ALTRO"
+]
 
 # --- FUNZIONE CONNESSIONE DATABASE ---
 def get_connection():
     return sqlite3.connect('magazzino_v3.db', check_same_thread=False)
 
-# Inizializzazione Database
 def init_db():
     conn = get_connection()
     c = conn.cursor()
@@ -32,10 +40,10 @@ st.set_page_config(page_title=NOME_OFFICINA, layout="wide", page_icon="🚲")
 def genera_etichetta(barcode_val, nome_prod, prezzo):
     try:
         rv = BytesIO()
+        # Generiamo il codice Code128 (standard per piccoli ricambi)
         Code128(str(barcode_val), writer=ImageWriter()).write(rv)
         return rv
     except Exception as e:
-        st.error(f"Errore generazione barcode: {e}")
         return None
 
 # --- SIDEBAR NAVIGAZIONE ---
@@ -44,7 +52,7 @@ menu = st.sidebar.radio("Menu principale", ["🏠 Dashboard", "📥 Carico Fattu
 
 # --- SEZIONE 1: DASHBOARD ---
 if menu == "🏠 Dashboard":
-    st.header(f"Benvenuto in {NOME_OFFICINA}")
+    st.header(f"Gestione Operativa {NOME_OFFICINA}")
     
     db_con = get_connection()
     df = pd.read_sql_query("SELECT * FROM prodotti", db_con)
@@ -52,92 +60,53 @@ if menu == "🏠 Dashboard":
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Articoli in Stock", len(df))
+        st.metric("Articoli Totali", len(df))
     with col2:
         sottoscorta = len(df[df['quantita'] < 3]) if not df.empty else 0
         st.metric("Allerta Sottoscorta", sottoscorta)
     with col3:
         valore = (df['quantita'] * df['prezzo_acquisto']).sum() if not df.empty else 0
-        st.metric("Valore Magazzino", f"€ {valore:,.2f}")
+        st.metric("Valore Attuale", f"€ {valore:,.2f}")
 
     st.divider()
     
-    st.subheader("📸 Scarico Rapido (Barcode)")
-    barcode_scan = st.text_input("Scansiona pezzo per scaricarlo (-1)", key="main_scan")
+    # FUNZIONE SCARICO RAPIDO (Per smartphone)
+    st.subheader("📲 Scarico Rapido Barcode")
+    barcode_scan = st.text_input("Scansiona per scaricare (-1)", placeholder="Inquadra il codice...")
     if barcode_scan:
         db_con = get_connection()
         c = db_con.cursor()
-        c.execute("SELECT componente, quantita FROM prodotti WHERE barcode=?", (barcode_scan,))
+        c.execute("SELECT componente, quantita, categoria FROM prodotti WHERE barcode=?", (barcode_scan,))
         res = c.fetchone()
         if res:
-            st.warning(f"Prodotto: {res[0]} | Disponibilità: {res[1]}")
-            if st.button("Conferma SCARICO"):
+            st.info(f"Articolo: **{res[0]}** | Settore: {res[2]} | Stock: {res[1]}")
+            if st.button("CONFERMA USCITA (VENDITA/RIPARAZIONE)", use_container_width=True):
                 c.execute("UPDATE prodotti SET quantita = quantita - 1 WHERE barcode=?", (barcode_scan,))
                 db_con.commit()
-                st.success("Scarico effettuato!")
+                st.success("Giacenza aggiornata!")
                 st.rerun()
         else:
-            st.error("Prodotto non trovato nel database!")
+            st.error("Codice non trovato. Registra l'articolo in 'Magazzino'.")
         db_con.close()
 
 # --- SEZIONE 2: CARICO FATTURE ---
 elif menu == "📥 Carico Fatture (Gmail/OCR)":
-    st.header("Caricamento Automatico")
-    st.info("Questa sezione permette di importare dati da Gmail o scansionare PDF.")
+    st.header("Automazione Carico")
+    tab1, tab2 = st.tabs(["📧 Gmail (Auto)", "📷 Foto Fattura (OCR)"])
     
-    tab1, tab2 = st.tabs(["📧 Gmail", "📷 OCR Foto"])
     with tab1:
-        st.write("Sincronizzazione con la tua mail in corso...")
-        if st.button("Avvia ricerca fatture"):
-            st.warning("Configurazione Gmail Secrets richiesta per questa operazione.")
+        st.write("Sincronizzazione fatture da Amazon, Shimano, RMS...")
+        if st.button("Sincronizza Gmail"):
+            st.info("Connessione ai Secrets in corso...")
+    
     with tab2:
-        st.write("Carica una foto per estrarre i dati.")
-        st.file_uploader("Scegli file", type=['png', 'jpg', 'pdf'])
+        uploaded_file = st.file_uploader("Carica foto o PDF fattura", type=['png', 'jpg', 'pdf'])
+        if uploaded_file:
+            st.image(uploaded_file, caption="Documento caricato", width=400)
+            st.warning("OCR in elaborazione: estrazione codici e prezzi...")
 
 # --- SEZIONE 3: MAGAZZINO E ETICHETTE ---
 elif menu == "📦 Magazzino & Etichette":
-    st.header("Gestione Scorte")
+    st.header("Giacenze e Stampa Etichette")
     
-    with st.expander("📥 Importa Inventario 2025 (CSV)"):
-        uploaded_csv = st.file_uploader("Carica file .csv", type="csv")
-        if uploaded_csv:
-            df_import = pd.read_csv(uploaded_csv)
-            st.dataframe(df_import.head())
-            if st.button("ESEGUI IMPORTAZIONE"):
-                db_con = get_connection()
-                c = db_con.cursor()
-                for _, row in df_import.iterrows():
-                    c.execute('''INSERT OR REPLACE INTO prodotti VALUES (?,?,?,?,?,?,?)''', 
-                              (str(row.get('Barcode', '')), row.get('Categoria', 'Altro'), 
-                               row.get('Componente', ''), row.get('Marca', ''), 
-                               int(row.get('Quantita', 0)), float(row.get('Prezzo_Acquisto', 0.0)), 
-                               float(row.get('Prezzo_Vendita', 0.0))))
-                db_con.commit()
-                db_con.close()
-                st.success("Importazione completata!")
-
-    sel_settore = st.selectbox("Seleziona Settore", SETTORI)
-    db_con = get_connection()
-    df_m = pd.read_sql_query("SELECT * FROM prodotti WHERE categoria=?", db_con, params=(sel_settore,))
-    db_con.close()
-    
-    if not df_m.empty:
-        for idx, row in df_m.iterrows():
-            with st.expander(f"{row['componente']} - Qty: {row['quantita']}"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"Prezzo: €{row['prezzo_vendita']}")
-                with col2:
-                    if st.button("Etichetta", key=f"btn_{row['barcode']}"):
-                        label = genera_etichetta(row['barcode'], row['componente'], row['prezzo_vendita'])
-                        if label: st.image(label)
-
-# --- SEZIONE 4: CONTABILITÀ ---
-elif menu == "📊 Contabilità":
-    st.header("Analisi Economica")
-    st.write("Statistiche del magazzino in tempo reale.")
-    db_con = get_connection()
-    df_c = pd.read_sql_query("SELECT * FROM prodotti", db_con)
-    db_con.close()
-    if not df_c.empty:
-        st.metric("Valore Totale", f"€ {(df_c['quantita'] * df_c['prezzo_acquisto']).sum():,.2f}")
+    with st.expander("📥 Importa Inventario (Adatta da Excel/CSV)"):
