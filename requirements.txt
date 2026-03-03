@@ -1,0 +1,8 @@
+streamlit
+pandas
+pytesseract
+Pillow
+google-api-python-client
+google-auth-oauthlib
+barcode
+reportlab
