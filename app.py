@@ -90,7 +90,8 @@ elif menu == "📥 Carico Fatture (Gmail/OCR)":
 
 # --- SEZIONE 3: MAGAZZINO E ETICHETTE ---
 elif menu == "📦 Magazzino & Etichette":
-    st.header("Gestione Scorte e Stampa")
+# Invece di usare 'conn' direttamente, passiamo la connessione pulita
+df_m = pd.read_sql_query("SELECT * FROM prodotti WHERE categoria='" + sel_settore + "'", get_connection())    st.header("Gestione Scorte e Stampa")
     sel_settore = st.selectbox("Filtra per Settore", SETTORI)
     
     df_m = pd.read_sql_query("SELECT * FROM prodotti WHERE categoria=?", (sel_settore,), conn)
