@@ -16,7 +16,7 @@ def get_connection():
 
 def init_db():
     conn = get_connection()
-    # Aggiunta colonna anno_emissione per tracciamento fatture
+    # Tabella prodotti con colonna anno_emissione
     conn.execute('''CREATE TABLE IF NOT EXISTS prodotti
                  (barcode TEXT PRIMARY KEY, categoria TEXT, componente TEXT, 
                   marca TEXT, quantita INTEGER, prezzo_acquisto REAL, 
@@ -28,7 +28,7 @@ init_db()
 st.set_page_config(page_title=NOME_OFFICINA, layout="wide", page_icon="🚲")
 
 # --- FUNZIONE GENERAZIONE ETICHETTA ---
-def genera_etichetta(barcode_val, prezzo):
+def genera_etichetta(barcode_val):
     try:
         rv = BytesIO()
         Code128(str(barcode_val), writer=ImageWriter()).write(rv)
@@ -47,44 +47,38 @@ if menu == "🏠 Dashboard":
     df = pd.read_sql_query("SELECT * FROM prodotti", db_con)
     db_con.close()
     
-    c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Articoli in Stock", len(df))
-    with c2: st.metric("Sottoscorta (<3)", len(df[df['quantita'] < 3]) if not df.empty else 0)
-    with c3: 
+    col1, col2, col3 = st.columns(3)
+    with col1: st.metric("Articoli in Stock", len(df))
+    with col2: st.metric("Sottoscorta (<3)", len(df[df['quantita'] < 3]) if not df.empty else 0)
+    with col3: 
         valore = (df['quantita'] * df['prezzo_acquisto']).sum() if not df.empty else 0
         st.metric("Valore Magazzino", f"€ {valore:,.2f}")
 
-# --- 2. CARICO FATTURE (CON FILTRO ANNO) ---
+# --- 2. CARICO FATTURE (FILTRO ANNO) ---
 elif menu == "📥 Carico Fatture (Gmail/OCR)":
     st.header("Ricerca Fatture Fornitori")
-    
-    # Filtro anno richiesto
     anno_attuale = datetime.datetime.now().year
-    anno_sel = st.number_input("Anno di emissione da filtrare", min_value=2020, max_value=2030, value=anno_attuale)
+    anno_sel = st.number_input("Anno di emissione da cercare", min_value=2020, max_value=2030, value=anno_attuale)
     
-    t1, t2 = st.tabs(["📧 Sincronizzazione Gmail", "📷 Carica PDF/Foto"])
+    t1, t2 = st.tabs(["📧 Gmail Sync", "📷 Carica Documento"])
     with t1:
-        st.write(f"Ricerca email con fatture emesse nel **{anno_sel}**")
-        if st.button(f"Avvia scansione Gmail {anno_sel}"):
-            st.info(f"Connessione ai server Google... Filtro impostato: dopo 01/01/{anno_sel}")
-            # Qui si attiverà la logica Gmail con i Secrets
-            
+        st.write(f"Cerco fatture emesse nell'anno: **{anno_sel}**")
+        if st.button(f"Scansiona Gmail {anno_sel}"):
+            st.info(f"Ricerca email con filtri temporali per l'anno {anno_sel}...")
     with t2:
-        up = st.file_uploader("Trascina qui la fattura", type=['pdf', 'jpg', 'png'])
-        if up: st.success("File pronto per l'analisi OCR")
+        up = st.file_uploader("Trascina file qui", type=['pdf', 'jpg', 'png'])
 
 # --- 3. MAGAZZINO & IMPORTAZIONE ---
 elif menu == "📦 Magazzino & Etichette":
     st.header("Gestione Giacenze")
     
     with st.expander("📥 Importa Inventario da CSV"):
-        up_csv = st.file_uploader("Carica il file .csv", type="csv")
+        up_csv = st.file_uploader("Seleziona file .csv", type="csv")
         if up_csv:
             df_up = pd.read_csv(up_csv)
-            st.write("Colonne trovate:", list(df_up.columns))
-            
             if st.button("ESEGUI IMPORTAZIONE"):
                 db_con = get_connection()
+                # Funzione per trovare le colonne
                 def find(keys):
                     for k in keys:
                         for c in df_up.columns:
@@ -102,13 +96,13 @@ elif menu == "📦 Magazzino & Etichette":
                                    int(row.get(find(['qty', 'quant']), 0)),
                                    float(row.get(find(['acq', 'costo']), 0)),
                                    float(row.get(find(['vend', 'listino']), 0)),
-                                   anno_sel))
+                                   anno_sel if 'anno_sel' in locals() else anno_attuale))
                 db_con.commit()
                 db_con.close()
                 st.success("Importazione completata!")
 
     st.divider()
-    sel_set = st.selectbox("Seleziona Settore", SETTORI)
+    sel_set = st.selectbox("Filtra per Settore", SETTORI)
     db_con = get_connection()
     df_m = pd.read_sql_query("SELECT * FROM prodotti WHERE categoria=?", db_con, params=(sel_set,))
     db_con.close()
@@ -116,6 +110,24 @@ elif menu == "📦 Magazzino & Etichette":
     if not df_m.empty:
         for _, r in df_m.iterrows():
             with st.expander(f"{r['componente']} - Qty: {r['quantita']}"):
-                if st.button(f"Stampa {r['barcode']}", key=r['barcode']):
-                    img = genera_etichetta(r['barcode'], r['prezzo_vendita'])
-                    if img: st.image(img, caption=f"Prezzo: €{r
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.write(f"Prezzo Vendita: €{r['prezzo_vendita']:.2f}")
+                with col2:
+                    if st.button(f"Etichetta {r['barcode']}", key=f"btn_{r['barcode']}"):
+                        img = genera_etichetta(r['barcode'])
+                        if img:
+                            st.image(img, caption=f"Prezzo: €{r['prezzo_vendita']:.2f}")
+    else:
+        st.info("Nessun articolo trovato.")
+
+# --- 4. CONTABILITÀ ---
+elif menu == "📊 Contabilità":
+    st.header("Analisi Economica")
+    db_con = get_connection()
+    df_c = pd.read_sql_query("SELECT * FROM prodotti", db_con)
+    db_con.close()
+    if not df_c.empty:
+        valore_inv = (df_c['quantita'] * df_c['prezzo_acquisto']).sum()
+        st.metric("Valore Totale Inventario (Costo)", f"€ {valore_inv:,.2f}")
+        st.bar_chart(df_c.groupby('categoria')['prezzo_acquisto'].sum())
