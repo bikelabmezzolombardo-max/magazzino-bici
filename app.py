@@ -1,14 +1,17 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import datetime
-from barcode import Code128
-from barcode.writer import ImageWriter
-from io import BytesIO
+import os
+import base64
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
 
 # --- CONFIGURAZIONE ---
-NOME_OFFICINA = "BIKE LAB"
+NOME_OFFICINA = "BIKE LAB MEZZOLOMBARDO"
 SETTORI = ["COPERTONI", "PASTIGLIE", "ACCESSORI FRENI", "TRASMISSIONE", "CAMERE D'ARIA", "ACCESSORI TELAIO", "ALTRO"]
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 # --- FUNZIONI DATABASE ---
 def get_connection():
@@ -23,130 +26,92 @@ def init_db():
     conn.commit()
     conn.close()
 
+# --- AUTENTICAZIONE GMAIL ---
+def get_gmail_service():
+    creds = None
+    # Il file token.json memorizza l'accesso dell'utente
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    
+    return build('gmail', 'v1', credentials=creds)
+
+# --- AVVIO APP ---
 init_db()
 st.set_page_config(page_title=NOME_OFFICINA, layout="wide", page_icon="🚲")
 
-# --- FUNZIONE GENERAZIONE ETICHETTA ---
-def genera_etichetta(barcode_val):
-    try:
-        rv = BytesIO()
-        Code128(str(barcode_val), writer=ImageWriter()).write(rv)
-        return rv
-    except:
-        return None
-
 # --- SIDEBAR ---
 st.sidebar.title(f"🚲 {NOME_OFFICINA}")
-menu = st.sidebar.radio("Menu principale", ["🏠 Dashboard", "📥 Carico Fatture & DDT", "📦 Magazzino & Etichette", "📊 Contabilità"])
+menu = st.sidebar.radio("Menu", ["🏠 Dashboard", "📥 Carico Merci", "📦 Magazzino", "📊 Contabilità"])
 
-# --- 1. DASHBOARD ---
+# --- DASHBOARD ---
 if menu == "🏠 Dashboard":
-    st.header(f"Gestione Operativa {NOME_OFFICINA}")
-    
-    db_con = get_connection()
-    df_all = pd.read_sql_query("SELECT * FROM prodotti", db_con)
-    db_con.close()
-    
-    col1, col2, col3 = st.columns(3)
-    with col1: st.metric("Articoli Totali", len(df_all))
-    with col2: st.metric("Sottoscorta (<3)", len(df_all[df_all['quantita'] < 3]) if not df_all.empty else 0)
-    with col3: 
-        val_inv = (df_all['quantita'] * df_all['prezzo_acquisto']).sum() if not df_all.empty else 0
-        st.metric("Valore Magazzino", f"€ {val_inv:,.2f}")
+    st.header(f"Dashboard - {NOME_OFFICINA}")
+    st.info("Benvenuto! Usa il menu a sinistra per gestire il magazzino.")
 
-    st.divider()
-
-    st.subheader("📁 Visualizzazione Rapida per Categoria")
-    cols = st.columns(4)
-    for i, settore in enumerate(SETTORI):
-        if cols[i % 4].button(settore, use_container_width=True):
-            st.session_state['cat_selezionata'] = settore
-
-    if 'cat_selezionata' in st.session_state:
-        sel = st.session_state['cat_selezionata']
-        st.markdown(f"### 📦 Articoli in: **{sel}**")
-        df_cat = df_all[df_all['categoria'] == sel]
-        if not df_cat.empty:
-            st.dataframe(df_cat[['componente', 'marca', 'quantita', 'prezzo_vendita']], use_container_width=True, hide_index=True)
-        else:
-            st.info(f"Nessun articolo trovato in {sel}.")
-
-# --- 2. CARICO FATTURE, DDT E BOLLE ---
-elif menu == "📥 Carico Fatture & DDT":
-    st.header("Ricerca Documenti di Trasporto e Fatture")
+# --- CARICO MERCI (Integrazione Gmail) ---
+elif menu == "📥 Carico Merci":
+    st.header("Carico Merci da Gmail")
     
-    anno_attuale = datetime.datetime.now().year
-    anno_sel = st.number_input("Seleziona anno di emissione", min_value=2020, max_value=2030, value=anno_attuale)
+    anno_ricerca = st.selectbox("Seleziona Anno", [2024, 2025, 2026], index=1)
     
-    st.info(f"L'app cercherà email contenenti 'Fattura', 'DDT', 'Bolla' o 'Documento di trasporto' emessi nel {anno_sel}")
-    
-    t1, t2 = st.tabs(["📧 Ricerca in Gmail", "📷 Caricamento Manuale"])
-    
-    with t1:
-        st.write(f"Scansione Gmail per documenti {anno_sel}...")
-        if st.button("Avvia ricerca automatica"):
-            # Logica di ricerca: (DDT OR Bolla OR Fattura) after:YYYY-01-01
-            st.warning(f"Ricerca in corso: 'DDT' o 'Bolla' dopo il 01/01/{anno_sel}...")
-            # Qui si interfaccia con i Google Secrets per la ricerca effettiva
-            
-    with t2:
-        up = st.file_uploader("Carica scansione DDT o Fattura", type=['pdf', 'jpg', 'png'])
-        if up:
-            st.success("Documento pronto per l'estrazione dati OCR.")
+    if st.button("🔍 Cerca Fatture (inclusa RMS)"):
+        try:
+            service = get_gmail_service()
+            # Query ottimizzata: cerca RMS o Fattura o Invoice con allegati
+            query = f'after:{anno_ricerca}/01/01 "RMS" OR "Fattura" OR "Invoice" has:attachment'
+            results = service.users().messages().list(userId='me', q=query).execute()
+            messages = results.get('messages', [])
 
-# --- 3. MAGAZZINO & IMPORTAZIONE ---
-elif menu == "📦 Magazzino & Etichette":
-    st.header("Gestione Giacenze")
-    
-    with st.expander("📥 Importa Inventario da CSV"):
-        up_csv = st.file_uploader("Carica file .csv", type="csv")
-        if up_csv:
-            df_up = pd.read_csv(up_csv)
-            if st.button("ESEGUI IMPORTAZIONE"):
-                db_con = get_connection()
-                def find(keys):
-                    for k in keys:
-                        for c in df_up.columns:
-                            if k.lower() in c.lower(): return c
-                    return None
-
-                for _, row in df_up.iterrows():
-                    raw_cat = str(row.get(find(['cat']), 'ALTRO')).upper().replace("TOT.", "").strip()
-                    clean_cat = raw_cat if raw_cat in SETTORI else "ALTRO"
+            if not messages:
+                st.warning("Nessuna fattura trovata con i criteri inseriti.")
+            else:
+                st.success(f"Trovate {len(messages)} email potenziali.")
+                for msg in messages:
+                    m_data = service.users().messages().get(userId='me', id=msg['id']).execute()
+                    subject = next(h['value'] for h in m_data['payload']['headers'] if h['name'] == 'Subject')
+                    date = next(h['value'] for h in m_data['payload']['headers'] if h['name'] == 'Date')
+                    st.write(f"**Soggetto:** {subject} | **Data:** {date}")
                     
-                    db_con.execute('''INSERT OR REPLACE INTO prodotti VALUES (?,?,?,?,?,?,?,?)''',
-                                  (str(row.get(find(['barcode', 'codice']), '')), clean_cat,
-                                   str(row.get(find(['comp', 'art']), 'Articolo')),
-                                   str(row.get(find(['marca', 'brand']), '')),
-                                   int(row.get(find(['qty', 'quant']), 0)),
-                                   float(row.get(find(['acq', 'costo']), 0.0)),
-                                   float(row.get(find(['vend', 'listino']), 0.0)),
-                                   anno_sel if 'anno_sel' in locals() else anno_attuale))
-                db_con.commit()
-                db_con.close()
-                st.success("Importazione completata!")
+                    # Bottone simulato per il "carico rapido"
+                    if st.button(f"Carica dati da: {subject[:20]}...", key=msg['id']):
+                        st.info("Funzione di estrazione dati automatica in fase di sviluppo.")
+
+        except Exception as e:
+            st.error(f"Errore di connessione: {e}")
 
     st.divider()
-    sel_set = st.selectbox("Seleziona Settore", SETTORI)
-    db_con = get_connection()
-    df_m = pd.read_sql_query("SELECT * FROM prodotti WHERE categoria=?", db_con, params=(sel_set,))
-    db_con.close()
-    
-    if not df_m.empty:
-        for _, r in df_m.iterrows():
-            with st.expander(f"{r['componente']} - Qty: {r['quantita']}"):
-                if st.button(f"Stampa {r['barcode']}", key=f"btn_{r['barcode']}"):
-                    img = genera_etichetta(r['barcode'])
-                    if img:
-                        st.image(img, caption=f"Prezzo: €{r['prezzo_vendita']:.2f}")
+    st.subheader("Inserimento Manuale")
+    with st.form("nuovo_prodotto"):
+        c1, c2 = st.columns(2)
+        with c1:
+            bc = st.text_input("Barcode")
+            cat = st.selectbox("Categoria", SETTORI)
+            comp = st.text_input("Nome Componente")
+        with c2:
+            qta = st.number_input("Quantità", min_value=1)
+            pr_v = st.number_input("Prezzo Vendita", min_value=0.0)
+        
+        if st.form_submit_button("Salva nel DB"):
+            conn = get_connection()
+            conn.execute("INSERT INTO prodotti (barcode, categoria, componente, quantita, prezzo_vendita) VALUES (?,?,?,?,?)",
+                         (bc, cat, comp, qta, pr_v))
+            conn.commit()
+            conn.close()
+            st.success("Prodotto salvato!")
 
-# --- 4. CONTABILITÀ ---
-elif menu == "📊 Contabilità":
-    st.header("Analisi Economica")
-    db_con = get_connection()
-    df_c = pd.read_sql_query("SELECT * FROM prodotti", db_con)
-    db_con.close()
-    if not df_c.empty:
-        val_tot = (df_c['quantita'] * df_c['prezzo_acquisto']).sum()
-        st.metric("Valore Totale Inventario (Costo)", f"€ {val_tot:,.2f}")
-        st.bar_chart(df_c.groupby('categoria')['prezzo_acquisto'].sum())
+# --- MAGAZZINO ---
+elif menu == "📦 Magazzino":
+    st.header("Inventario")
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM prodotti", conn)
+    conn.close()
+    st.dataframe(df, use_container_width=True)
