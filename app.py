@@ -26,7 +26,6 @@ def analizza_pdf_rms(file):
                 if not testo: continue
                 linee = testo.split('\n')
                 for linea in linee:
-                    # Regex per catturare lo schema RMS: Codice | Descrizione | Quantità | Prezzo
                     match = re.search(r'(\d+)\s+(.+?)\s+(\d+)\s+(\d+,\d{2})', linea)
                     if match:
                         prodotti.append({
@@ -39,7 +38,7 @@ def analizza_pdf_rms(file):
         st.error(f"Errore lettura PDF: {e}")
     return prodotti
 
-# --- 3. INIZIALIZZAZIONE INTERFACCIA ---
+# --- 3. INIZIALIZZAZIONE ---
 st.set_page_config(page_title=NOME_OFFICINA, layout="wide", page_icon="🚲")
 
 if 'lista_temporanea' not in st.session_state:
@@ -47,12 +46,13 @@ if 'lista_temporanea' not in st.session_state:
 if 'nome_file' not in st.session_state:
     st.session_state['nome_file'] = ""
 
-menu = st.sidebar.radio("Navigazione", ["🏠 Dashboard / Carico", "📦 Inventario per Categoria"])
+# Cambio nome menu richiesto: "Inventario"
+menu = st.sidebar.radio("Navigazione", ["🏠 Dashboard / Carico", "📦 Inventario"])
 
-# --- 4. DASHBOARD (INGRESSO MERCE) ---
+# --- 4. DASHBOARD (CARICO MERCE) ---
 if menu == "🏠 Dashboard / Carico":
     st.title(f"🚲 {NOME_OFFICINA}")
-    st.subheader("📥 INGRESSO MERCE")
+    st.subheader("📥 INGRESSO MERCE (Carico)")
     
     uploaded_file = st.file_uploader("Carica la fattura/bolla in PDF", type=["pdf"])
 
@@ -62,7 +62,6 @@ if menu == "🏠 Dashboard / Carico":
 
     if st.session_state['lista_temporanea']:
         st.info(f"Prodotti trovati in: {st.session_state['nome_file']}")
-        
         for i, prod in enumerate(st.session_state['lista_temporanea']):
             with st.expander(f"📦 {prod['desc']} (Cod: {prod['cod']})"):
                 c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
@@ -71,16 +70,14 @@ if menu == "🏠 Dashboard / Carico":
                 with c2:
                     st.write(f"Acquisto: €{prod['prezzo']}")
                 with c3:
-                    prezzo_v = st.number_input("Prezzo Vendita €", value=float(prod['prezzo']*1.6), key=f"pv_{i}")
+                    prezzo_v = st.number_input("Vendita €", value=float(prod['prezzo']*1.6), key=f"pv_{i}")
                 with c4:
                     st.write("")
-                    if st.button("SALVA IN DB", key=f"btn_{i}", use_container_width=True):
+                    if st.button("CARICA", key=f"btn_{i}", use_container_width=True):
                         conn = get_db()
-                        # Qui aggiungiamo alla giacenza esistente se il prodotto c'è già
                         cursor = conn.cursor()
                         cursor.execute("SELECT quantita FROM prodotti WHERE barcode=?", (prod['cod'],))
                         existing = cursor.fetchone()
-                        
                         nuova_qty = prod['qty'] + (existing[0] if existing else 0)
                         
                         conn.execute('''INSERT OR REPLACE INTO prodotti 
@@ -88,26 +85,47 @@ if menu == "🏠 Dashboard / Carico":
                                      VALUES (?, ?, ?, ?, ?, ?, ?)''', 
                                      (prod['cod'], categoria, prod['desc'], "RMS", nuova_qty, prod['prezzo'], prezzo_v))
                         conn.commit()
-                        st.toast(f"✅ {prod['cod']} aggiunto!")
+                        st.toast(f"✅ {prod['cod']} caricato!")
 
-# --- 5. INVENTARIO ---
-elif menu == "📦 Inventario per Categoria":
-    st.title("📦 Inventario Suddiviso")
+# --- 5. INVENTARIO (CON FUNZIONE SCARICO) ---
+elif menu == "📦 Inventario":
+    st.title("📦 Inventario Magazzino")
+    
     conn = get_db()
     df_all = pd.read_sql_query("SELECT * FROM prodotti", conn)
-    conn.close()
-
+    
     if df_all.empty:
-        st.warning("Nessun dato in magazzino.")
+        st.warning("Il magazzino è vuoto.")
     else:
         for cat in SETTORI:
             df_cat = df_all[df_all['categoria'] == cat]
             with st.expander(f"📂 {cat} ({len(df_cat)} articoli)", expanded=True):
                 if not df_cat.empty:
-                    # Mostriamo le colonne richieste
+                    # Tabella riassuntiva
                     df_view = df_cat[['barcode', 'componente', 'quantita', 'prezzo_acquisto']]
-                    df_view.columns = ['Codice Articolo', 'Descrizione', 'Stock / Pezzi Acq.', 'Prezzo Acquisto (€)']
+                    df_view.columns = ['Codice', 'Descrizione', 'Stock attuale', 'Prezzo Acq.']
                     st.dataframe(df_view, use_container_width=True, hide_index=True)
                     
-                    valore = (df_cat['quantita'] * df_cat['prezzo_acquisto']).sum()
-                    st.write(f"**Valore Totale {cat}:** € {valore:,.2f}")
+                    st.write("---")
+                    st.write("🔧 **Gestione Scarico (Vendita/Utilizzo):**")
+                    
+                    # Sezione Scarico Merce
+                    for _, r in df_cat.iterrows():
+                        col_desc, col_qty, col_btn = st.columns([3, 1, 1])
+                        with col_desc:
+                            st.write(f"{r['componente']} (Disponibili: {r['quantita']})")
+                        with col_qty:
+                            n_scarico = st.number_input("Pezzi da togliere", min_value=1, max_value=int(r['quantita']) if r['quantita'] > 0 else 1, key=f"out_qty_{r['barcode']}", label_visibility="collapsed")
+                        with col_btn:
+                            if st.button("SCARICA", key=f"out_btn_{r['barcode']}", use_container_width=True):
+                                if r['quantita'] >= n_scarico:
+                                    nuova_qty = r['quantita'] - n_scarico
+                                    conn.execute("UPDATE prodotti SET quantita = ? WHERE barcode = ?", (nuova_qty, r['barcode']))
+                                    conn.commit()
+                                    st.success(f"Scaricato! Nuovo stock: {nuova_qty}")
+                                    st.rerun() # Ricarica per aggiornare i numeri
+                                else:
+                                    st.error("Quantità non sufficiente!")
+                else:
+                    st.write("Nessun articolo in questa categoria.")
+    conn.close()
