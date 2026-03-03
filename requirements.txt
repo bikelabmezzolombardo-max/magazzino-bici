@@ -4,5 +4,6 @@ pytesseract
 Pillow
 google-api-python-client
 google-auth-oauthlib
-barcode
+python-barcode
 reportlab
+setuptools
