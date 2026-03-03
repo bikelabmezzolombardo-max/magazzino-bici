@@ -6,9 +6,8 @@ from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 
-# --- CONFIGURAZIONE OFFICINA (Adattata al tuo file CSV) ---
+# --- CONFIGURAZIONE OFFICINA (Adattata al tuo resoconto) ---
 NOME_OFFICINA = "BIKE LAB"
-# Queste sono le categorie estratte dal tuo resoconto 2025
 SETTORI = [
     "COPERTONI", 
     "PASTIGLIE", 
@@ -19,7 +18,7 @@ SETTORI = [
     "ALTRO"
 ]
 
-# --- FUNZIONE CONNESSIONE DATABASE ---
+# --- FUNZIONI DATABASE ---
 def get_connection():
     return sqlite3.connect('magazzino_v3.db', check_same_thread=False)
 
@@ -40,10 +39,9 @@ st.set_page_config(page_title=NOME_OFFICINA, layout="wide", page_icon="🚲")
 def genera_etichetta(barcode_val, nome_prod, prezzo):
     try:
         rv = BytesIO()
-        # Generiamo il codice Code128 (standard per piccoli ricambi)
         Code128(str(barcode_val), writer=ImageWriter()).write(rv)
         return rv
-    except Exception as e:
+    except Exception:
         return None
 
 # --- SIDEBAR NAVIGAZIONE ---
@@ -70,7 +68,6 @@ if menu == "🏠 Dashboard":
 
     st.divider()
     
-    # FUNZIONE SCARICO RAPIDO (Per smartphone)
     st.subheader("📲 Scarico Rapido Barcode")
     barcode_scan = st.text_input("Scansiona per scaricare (-1)", placeholder="Inquadra il codice...")
     if barcode_scan:
@@ -79,34 +76,15 @@ if menu == "🏠 Dashboard":
         c.execute("SELECT componente, quantita, categoria FROM prodotti WHERE barcode=?", (barcode_scan,))
         res = c.fetchone()
         if res:
-            st.info(f"Articolo: **{res[0]}** | Settore: {res[2]} | Stock: {res[1]}")
-            if st.button("CONFERMA USCITA (VENDITA/RIPARAZIONE)", use_container_width=True):
+            st.info(f"Articolo: **{res[0]}** | Stock: {res[1]}")
+            if st.button("CONFERMA SCARICO", use_container_width=True):
                 c.execute("UPDATE prodotti SET quantita = quantita - 1 WHERE barcode=?", (barcode_scan,))
                 db_con.commit()
                 st.success("Giacenza aggiornata!")
                 st.rerun()
         else:
-            st.error("Codice non trovato. Registra l'articolo in 'Magazzino'.")
+            st.error("Codice non trovato.")
         db_con.close()
 
 # --- SEZIONE 2: CARICO FATTURE ---
-elif menu == "📥 Carico Fatture (Gmail/OCR)":
-    st.header("Automazione Carico")
-    tab1, tab2 = st.tabs(["📧 Gmail (Auto)", "📷 Foto Fattura (OCR)"])
-    
-    with tab1:
-        st.write("Sincronizzazione fatture da Amazon, Shimano, RMS...")
-        if st.button("Sincronizza Gmail"):
-            st.info("Connessione ai Secrets in corso...")
-    
-    with tab2:
-        uploaded_file = st.file_uploader("Carica foto o PDF fattura", type=['png', 'jpg', 'pdf'])
-        if uploaded_file:
-            st.image(uploaded_file, caption="Documento caricato", width=400)
-            st.warning("OCR in elaborazione: estrazione codici e prezzi...")
-
-# --- SEZIONE 3: MAGAZZINO E ETICHETTE ---
-elif menu == "📦 Magazzino & Etichette":
-    st.header("Giacenze e Stampa Etichette")
-    
-    with st.expander("📥 Importa Inventario (Adatta da Excel/CSV)"):
+elif menu == "📥 Carico Fatture (Gmail/OCR
