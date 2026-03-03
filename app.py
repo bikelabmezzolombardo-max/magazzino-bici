@@ -10,11 +10,9 @@ SETTORI = ["COPERTONI", "PASTIGLIE", "ACCESSORI FRENI", "TRASMISSIONE", "CAMERE 
 
 def get_db():
     conn = sqlite3.connect('magazzino_v3.db', check_same_thread=False)
-    # Tabella Prodotti
     conn.execute('''CREATE TABLE IF NOT EXISTS prodotti 
                  (barcode TEXT PRIMARY KEY, categoria TEXT, componente TEXT, 
                   marca TEXT, quantita INTEGER, prezzo_acquisto REAL, prezzo_vendita REAL)''')
-    # Tabella Fatture
     conn.execute('''CREATE TABLE IF NOT EXISTS fatture 
                  (id_fattura TEXT PRIMARY KEY, data_doc TEXT, fornitore TEXT, importo REAL, file_name TEXT)''')
     return conn
@@ -28,11 +26,9 @@ def analizza_file(file):
         try:
             with pdfplumber.open(file) as pdf:
                 testo_completo = "".join([p.extract_text() or "" for p in pdf.pages])
-                # Estrazione Numero Documento (Logica RMS)
                 num = re.search(r'N\.\s*DOCUMENTO\s*\n\s*(\d+)', testo_completo)
                 if num: dati_doc["numero"] = num.group(1)
                 
-                # Estrazione Data
                 data_m = re.search(r'(\d{2}/\d{2}/\d{4})', testo_completo)
                 if data_m: dati_doc["data"] = data_m.group(1)
 
@@ -59,7 +55,6 @@ def analizza_file(file):
                 prodotti.append({"cod": cod, "desc": desc, "qty": qty, "prezzo": prezzo})
                 dati_doc["totale"] += (prezzo * qty)
         except Exception as e: st.error(f"Errore CSV: {e}")
-            
     return dati_doc, prodotti
 
 # --- 3. INTERFACCIA ---
@@ -90,31 +85,17 @@ if menu == "🏠 Carico Merce":
             try:
                 db.execute("INSERT INTO fatture VALUES (?,?,?,?,?)", (d['numero'], d['data'], "RMS", d['totale'], up.name))
                 db.commit()
-                st.success("Fattura registrata correttamente!")
-            except: st.warning("Documento già presente in archivio.")
+                st.success("Fattura registrata!")
+            except: st.warning("Già presente.")
 
         st.write("---")
         for i, item in enumerate(p):
+            # LA RIGA CHE DAVA ERRORE (SISTEMATA):
             with st.expander(f"📦 {item['desc']} (Cod: {item['cod']})"):
                 c1, c2, c3 = st.columns([2, 1, 1])
                 cat = c1.selectbox("Settore", SETTORI, key=f"s_{i}")
                 pv = c2.number_input("Prezzo Vendita €", float(item['prezzo']*1.6), key=f"v_{i}")
-                if c3.button("AGGIUNGI A STOCK", key=f"b_{i}"):
+                if c3.button("AGGIUNGI", key=f"b_{i}"):
                     db = get_db()
                     cur = db.cursor()
-                    cur.execute("SELECT quantita FROM prodotti WHERE barcode=?", (item['cod'],))
-                    old = cur.fetchone()
-                    new_q = item['qty'] + (old[0] if old else 0)
-                    db.execute("INSERT OR REPLACE INTO prodotti VALUES (?,?,?,?,?,?,?)", 
-                                 (item['cod'], cat, item['desc'], "RMS", new_q, item['prezzo'], pv))
-                    db.commit()
-                    st.toast(f"Caricato {item['cod']}")
-
-# --- SEZIONE INVENTARIO ---
-elif menu == "📦 Inventario":
-    st.title("📦 Magazzino")
-    db = get_db()
-    df = pd.read_sql("SELECT * FROM prodotti", db)
-    for s in SETTORI:
-        df_s = df[df['categoria'] == s]
-        with st.expander(f
+                    cur
